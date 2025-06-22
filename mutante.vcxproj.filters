@@ -27,9 +27,6 @@
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="log.h">
-      <Filter>Source</Filter>
-    </ClInclude>
     <ClInclude Include="utils.h">
       <Filter>Source</Filter>
     </ClInclude>
@@ -41,6 +38,9 @@
     </ClInclude>
     <ClInclude Include="smbios.h">
       <Filter>Source\parts</Filter>
+    </ClInclude>
+    <ClInclude Include="log.h">
+      <Filter>Source</Filter>
     </ClInclude>
   </ItemGroup>
 </Project>
