@@ -43,4 +43,9 @@
       <Filter>Source</Filter>
     </ClInclude>
   </ItemGroup>
+  <ItemGroup>
+    <None Include="install_cpp.bat">
+      <Filter>Source</Filter>
+    </None>
+  </ItemGroup>
 </Project>

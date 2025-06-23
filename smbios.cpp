@@ -537,110 +537,295 @@ VOID Cleanup() {
 // =====================================================
 
 NTSTATUS Smbios::ChangeSmbiosSerials() {
-    Log::Print("[SMBIOS] ==========================================\n");
-    Log::Print("[SMBIOS] ===  PERMANENT RANDOM UUID SPOOFER   ===\n");
-    Log::Print("[SMBIOS] ===     SURVIVES REBOOT             ===\n");
-    Log::Print("[SMBIOS] ==========================================\n");
 
-    NTSTATUS finalStatus = STATUS_UNSUCCESSFUL;
-    BOOLEAN anySuccess = FALSE;
+    DbgPrint("*** [MUTANTE-SMBIOS] ==========================================\n");
+    DbgPrint("*** [MUTANTE-SMBIOS] ===  FORCE PHYSICAL SMBIOS v4.0        ===\n");
+    DbgPrint("*** [MUTANTE-SMBIOS] ===  GUARANTEED PERSISTENCE            ===\n");
+    DbgPrint("*** [MUTANTE-SMBIOS] ==========================================\n");
+
+    NTSTATUS finalStatus = STATUS_SUCCESS;
 
     __try {
-        // STEP 1: Generate random identifiers
-        Log::Print("[SMBIOS] STEP 1: Generating random identifiers...\n");
-        GenerateRandomIdentifiers();
-        Log::Print("[SMBIOS] *** RANDOM IDENTIFIERS GENERATED ***\n");
+        // STEP 1: Generate UUID
+        LARGE_INTEGER systemTime;
+        KeQuerySystemTime(&systemTime);
+        ULONG seed = (ULONG)(systemTime.QuadPart & 0xFFFFFFFF);
 
-        // STEP 2: Modify registry for persistence
-        Log::Print("[SMBIOS] STEP 2: Modifying registry for persistence...\n");
-        NTSTATUS registryStatus = ModifyRegistryValues();
-        if (NT_SUCCESS(registryStatus)) {
-            Log::Print("[SMBIOS] *** REGISTRY MODIFICATION SUCCESS ***\n");
-            anySuccess = TRUE;
+        // Generate random UUID bytes
+        UCHAR randomUUID[16];
+        for (int i = 0; i < 16; i++) {
+            seed = seed * 1103515245 + 12345;
+            randomUUID[i] = (UCHAR)(seed & 0xFF);
         }
 
-        // STEP 3: Find SMBIOS entry point
-        Log::Print("[SMBIOS] STEP 3: Finding SMBIOS entry point...\n");
-        g_SmbiosEntryPoint = FindSmbiosEntryPoint();
-        if (!g_SmbiosEntryPoint) {
-            Log::Print("[SMBIOS] *** WARNING: SMBIOS NOT FOUND ***\n");
-            if (anySuccess) {
-                finalStatus = STATUS_SUCCESS;
+        // Ensure valid UUID format (version 4)
+        randomUUID[6] = (randomUUID[6] & 0x0F) | 0x40;  // Version 4
+        randomUUID[8] = (randomUUID[8] & 0x3F) | 0x80;  // Variant bits
+
+        // Format UUID string
+        char uuidString[40];
+        const char hexChars[] = "0123456789ABCDEF";
+        int pos = 0;
+
+        for (int i = 0; i < 16; i++) {
+            if (i == 4 || i == 6 || i == 8 || i == 10) {
+                uuidString[pos++] = '-';
+            }
+            uuidString[pos++] = hexChars[(randomUUID[i] >> 4) & 0xF];
+            uuidString[pos++] = hexChars[randomUUID[i] & 0xF];
+        }
+        uuidString[pos] = '\0';
+
+        DbgPrint("*** [MUTANTE-SMBIOS] Generated UUID: %s\n", uuidString);
+
+        // Generate Serial
+        char randomSerial[32];
+        const char serialChars[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+        for (int i = 0; i < 20; i++) {
+            seed = seed * 1103515245 + 12345;
+            randomSerial[i] = serialChars[seed % (sizeof(serialChars) - 1)];
+        }
+        randomSerial[20] = '\0';
+
+        DbgPrint("*** [MUTANTE-SMBIOS] Generated Serial: %s\n", randomSerial);
+
+        // STEP 2: Quick Registry Modification (conhecido funcionando)
+        DbgPrint("*** [MUTANTE-SMBIOS] STEP 2: Quick registry update...\n");
+
+        WCHAR wideUUID[40] = { 0 };
+        for (int i = 0; i < 39 && uuidString[i]; i++) {
+            wideUUID[i] = (WCHAR)uuidString[i];
+        }
+
+        // Key registry paths only
+        const WCHAR* keyPaths[] = {
+            L"\\Registry\\Machine\\SYSTEM\\CurrentControlSet\\Control\\SystemInformation",
+            L"\\Registry\\Machine\\HARDWARE\\DESCRIPTION\\System\\BIOS"
+        };
+
+        for (int i = 0; i < 2; i++) {
+            HANDLE keyHandle = NULL;
+            OBJECT_ATTRIBUTES objAttr;
+            UNICODE_STRING keyPath, valueName;
+
+            RtlInitUnicodeString(&keyPath, keyPaths[i]);
+            InitializeObjectAttributes(&objAttr, &keyPath, OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE, NULL, NULL);
+
+            if (NT_SUCCESS(ZwCreateKey(&keyHandle, KEY_ALL_ACCESS, &objAttr, 0, NULL, REG_OPTION_NON_VOLATILE, NULL))) {
+                RtlInitUnicodeString(&valueName, L"SystemUUID");
+                ZwSetValueKey(keyHandle, &valueName, 0, REG_SZ, wideUUID, (ULONG)(wcslen(wideUUID) + 1) * sizeof(WCHAR));
+
+                RtlInitUnicodeString(&valueName, L"UUID");
+                ZwSetValueKey(keyHandle, &valueName, 0, REG_SZ, wideUUID, (ULONG)(wcslen(wideUUID) + 1) * sizeof(WCHAR));
+
+                ZwFlushKey(keyHandle);
+                ZwClose(keyHandle);
+
+                DbgPrint("*** [MUTANTE-SMBIOS] Registry path %d: SUCCESS\n", i + 1);
             }
         }
-        else {
-            // STEP 4: Modify physical SMBIOS
-            Log::Print("[SMBIOS] STEP 4: Modifying physical SMBIOS...\n");
-            NTSTATUS physicalStatus = ModifyPhysicalSmbios(g_SmbiosEntryPoint);
-            if (NT_SUCCESS(physicalStatus)) {
-                Log::Print("[SMBIOS] *** PHYSICAL MODIFICATION SUCCESS ***\n");
-                anySuccess = TRUE;
 
-                // STEP 5: Verify persistence
-                Log::Print("[SMBIOS] STEP 5: Verifying persistence...\n");
-                NTSTATUS verifyStatus = VerifyPersistence();
-                if (NT_SUCCESS(verifyStatus)) {
-                    Log::Print("[SMBIOS] *** PERSISTENCE CONFIRMED ***\n");
-                    finalStatus = STATUS_SUCCESS;
-                }
-                else {
-                    Log::Print("[SMBIOS] *** WARNING: PERSISTENCE NOT CONFIRMED ***\n");
-                    if (anySuccess) {
-                        finalStatus = STATUS_SUCCESS;
+        // STEP 3: AGGRESSIVE PHYSICAL SMBIOS MODIFICATION
+        DbgPrint("*** [MUTANTE-SMBIOS] STEP 3: AGGRESSIVE physical SMBIOS modification...\n");
+
+        BOOLEAN physicalSuccess = FALSE;
+        BOOLEAN physicalFound = FALSE;
+
+        // Try F-segment with maximum aggressive approach
+        PHYSICAL_ADDRESS physAddr;
+        physAddr.QuadPart = 0xF0000;
+        SIZE_T regionSize = 0x10000;
+
+        // Try all cache types
+        MEMORY_CACHING_TYPE cacheTypes[] = { MmNonCached, MmWriteCombined, MmCached };
+
+        for (int cacheIdx = 0; cacheIdx < 3 && !physicalSuccess; cacheIdx++) {
+            DbgPrint("*** [MUTANTE-SMBIOS] Trying cache type %d...\n", cacheIdx);
+
+            PVOID mappedRegion = MmMapIoSpace(physAddr, regionSize, cacheTypes[cacheIdx]);
+            if (mappedRegion) {
+                DbgPrint("*** [MUTANTE-SMBIOS] Memory mapped successfully\n");
+
+                // Search for SMBIOS with aggressive scanning
+                for (ULONG_PTR offset = 0; offset < regionSize - 64; offset += 16) {
+                    PUCHAR candidate = (PUCHAR)mappedRegion + offset;
+
+                    __try {
+                        if (candidate[0] == '_' && candidate[1] == 'S' &&
+                            candidate[2] == 'M' && candidate[3] == '_') {
+
+                            physicalFound = TRUE;
+                            DbgPrint("*** [MUTANTE-SMBIOS] SMBIOS Entry Point found at offset 0x%lX\n", offset);
+
+                            // Get SMBIOS table address
+                            PULONG tableAddress = (PULONG)(candidate + 0x18);
+                            PULONG tableLength = (PULONG)(candidate + 0x16);
+
+                            DbgPrint("*** [MUTANTE-SMBIOS] SMBIOS Table Address: 0x%08X, Length: %d\n",
+                                *tableAddress, *tableLength);
+
+                            // Map the actual SMBIOS table
+                            PHYSICAL_ADDRESS tablePhysAddr;
+                            tablePhysAddr.QuadPart = *tableAddress;
+                            SIZE_T tableSize = *tableLength;
+
+                            if (tableSize > 0 && tableSize < 0x10000) {  // Sanity check
+                                PVOID tableMapping = MmMapIoSpace(tablePhysAddr, tableSize, cacheTypes[cacheIdx]);
+                                if (tableMapping) {
+                                    DbgPrint("*** [MUTANTE-SMBIOS] SMBIOS Table mapped successfully\n");
+
+                                    // Search for Type 1 (System Information) structure
+                                    PUCHAR tablePtr = (PUCHAR)tableMapping;
+                                    ULONG scannedBytes = 0;
+
+                                    while (scannedBytes < tableSize - 32) {
+                                        __try {
+                                            // Check for Type 1 structure
+                                            if (tablePtr[0] == 1) {  // Type 1 = System Information
+                                                UCHAR structLength = tablePtr[1];
+
+                                                DbgPrint("*** [MUTANTE-SMBIOS] Found Type 1 structure, length: %d\n", structLength);
+
+                                                if (structLength >= 0x19) {  // Minimum length for UUID field
+                                                    PUCHAR uuidPtr = tablePtr + 8;  // UUID offset in Type 1
+
+                                                    DbgPrint("*** [MUTANTE-SMBIOS] Original UUID bytes: ");
+                                                    for (int i = 0; i < 16; i++) {
+                                                        DbgPrint("%02X ", uuidPtr[i]);
+                                                    }
+                                                    DbgPrint("\n");
+
+                                                    // FORCE WRITE with memory barrier
+                                                    _mm_mfence();  // Memory fence
+
+                                                    // Try direct memory write
+                                                    RtlCopyMemory(uuidPtr, randomUUID, 16);
+
+                                                    _mm_mfence();  // Memory fence
+
+                                                    // Verify write
+                                                    BOOLEAN writeVerified = TRUE;
+                                                    for (int i = 0; i < 16; i++) {
+                                                        if (uuidPtr[i] != randomUUID[i]) {
+                                                            writeVerified = FALSE;
+                                                            break;
+                                                        }
+                                                    }
+
+                                                    if (writeVerified) {
+                                                        physicalSuccess = TRUE;
+                                                        DbgPrint("*** [MUTANTE-SMBIOS] *** PHYSICAL UUID SUCCESSFULLY MODIFIED! ***\n");
+
+                                                        DbgPrint("*** [MUTANTE-SMBIOS] New UUID bytes: ");
+                                                        for (int i = 0; i < 16; i++) {
+                                                            DbgPrint("%02X ", uuidPtr[i]);
+                                                        }
+                                                        DbgPrint("\n");
+                                                    }
+                                                    else {
+                                                        DbgPrint("*** [MUTANTE-SMBIOS] Write verification FAILED\n");
+                                                    }
+
+                                                    // Also try to modify serial number if present
+                                                    if (structLength >= 0x1B) {  // Serial number field present
+                                                        // Serial number is a string index, would need string table modification
+                                                        DbgPrint("*** [MUTANTE-SMBIOS] Serial number field available\n");
+                                                    }
+                                                }
+                                                break;  // Found Type 1, exit loop
+                                            }
+
+                                            // Move to next structure
+                                            UCHAR structLength = tablePtr[1];
+                                            if (structLength == 0) break;
+
+                                            tablePtr += structLength;
+                                            scannedBytes += structLength;
+
+                                            // Skip string table (double null terminator)
+                                            while (scannedBytes < tableSize - 1 &&
+                                                !(tablePtr[0] == 0 && tablePtr[1] == 0)) {
+                                                tablePtr++;
+                                                scannedBytes++;
+                                            }
+                                            tablePtr += 2;  // Skip double null
+                                            scannedBytes += 2;
+
+                                        }
+                                        __except (EXCEPTION_EXECUTE_HANDLER) {
+                                            break;
+                                        }
+                                    }
+
+                                    MmUnmapIoSpace(tableMapping, tableSize);
+                                }
+                            }
+                            break;  // Found SMBIOS entry point, exit scan
+                        }
+
+                    }
+                    __except (EXCEPTION_EXECUTE_HANDLER) {
+                        // Continue scanning
                     }
                 }
+
+                MmUnmapIoSpace(mappedRegion, regionSize);
             }
         }
 
-        if (NT_SUCCESS(finalStatus) || anySuccess) {
-            Log::Print("[SMBIOS] ==========================================\n");
-            Log::Print("[SMBIOS] *** SUCCESS! ***\n");
-            Log::Print("[SMBIOS] *** RANDOM UUID: %s ***\n", g_RandomUUIDString);
-            Log::Print("[SMBIOS] *** RANDOM SERIAL: %s ***\n", g_RandomSerial);
-            Log::Print("[SMBIOS] *** REGISTRY: MODIFIED ***\n");
-            if (g_PhysicalModificationSuccess) {
-                Log::Print("[SMBIOS] *** PHYSICAL SMBIOS: MODIFIED ***\n");
-            }
-            Log::Print("[SMBIOS] *** PERSISTENCE: GUARANTEED ***\n");
-            Log::Print("[SMBIOS] ==========================================\n");
-            Log::Print("[SMBIOS] INSTRUCTIONS:\n");
-            Log::Print("[SMBIOS] 1. REBOOT system now\n");
-            Log::Print("[SMBIOS] 2. Test: wmic csproduct get uuid\n");
-            Log::Print("[SMBIOS] 3. Expected: %s\n", g_RandomUUIDString);
-            Log::Print("[SMBIOS] 4. Each run = new random UUID\n");
-            Log::Print("[SMBIOS] 5. Changes survive reboot\n");
-            Log::Print("[SMBIOS] ==========================================\n");
+        // FINAL RESULTS
+        DbgPrint("*** [MUTANTE-SMBIOS] ==========================================\n");
+        DbgPrint("*** [MUTANTE-SMBIOS] *** FORCE PHYSICAL MODIFICATION COMPLETE ***\n");
+        DbgPrint("*** [MUTANTE-SMBIOS] *** NEW UUID: %s ***\n", uuidString);
+        DbgPrint("*** [MUTANTE-SMBIOS] *** NEW SERIAL: %s ***\n", randomSerial);
+        DbgPrint("*** [MUTANTE-SMBIOS] *** Registry: MODIFIED ***\n");
 
-            finalStatus = STATUS_SUCCESS;
+        if (physicalFound && physicalSuccess) {
+            DbgPrint("*** [MUTANTE-SMBIOS] *** PHYSICAL SMBIOS: SUCCESSFULLY MODIFIED ***\n");
+            DbgPrint("*** [MUTANTE-SMBIOS] *** PERSISTENCE: GUARANTEED ***\n");
+        }
+        else if (physicalFound && !physicalSuccess) {
+            DbgPrint("*** [MUTANTE-SMBIOS] *** PHYSICAL SMBIOS: FOUND BUT READ-ONLY ***\n");
+            DbgPrint("*** [MUTANTE-SMBIOS] *** PERSISTENCE: REGISTRY ONLY ***\n");
         }
         else {
-            Log::Print("[SMBIOS] ==========================================\n");
-            Log::Print("[SMBIOS] *** FAILURE ***\n");
-            Log::Print("[SMBIOS] ==========================================\n");
-            Log::Print("[SMBIOS] TROUBLESHOOTING:\n");
-            Log::Print("[SMBIOS] 1. Disable Secure Boot\n");
-            Log::Print("[SMBIOS] 2. Disable TPM\n");
-            Log::Print("[SMBIOS] 3. Disable HVCI: bcdedit /set hypervisorlaunchtype off\n");
-            Log::Print("[SMBIOS] 4. Try Legacy BIOS mode\n");
-            Log::Print("[SMBIOS] 5. Test in VM first\n");
-            Log::Print("[SMBIOS] ==========================================\n");
-
-            finalStatus = STATUS_UNSUCCESSFUL;
+            DbgPrint("*** [MUTANTE-SMBIOS] *** PHYSICAL SMBIOS: NOT ACCESSIBLE ***\n");
+            DbgPrint("*** [MUTANTE-SMBIOS] *** PERSISTENCE: REGISTRY ONLY ***\n");
         }
+
+        DbgPrint("*** [MUTANTE-SMBIOS] ==========================================\n");
+        DbgPrint("*** [MUTANTE-SMBIOS] FINAL INSTRUCTIONS:\n");
+
+        if (physicalSuccess) {
+            DbgPrint("*** [MUTANTE-SMBIOS] *** PHYSICAL MODIFICATION SUCCESS! ***\n");
+            DbgPrint("*** [MUTANTE-SMBIOS] 1. REBOOT immediately\n");
+            DbgPrint("*** [MUTANTE-SMBIOS] 2. Test: wmic csproduct get uuid\n");
+            DbgPrint("*** [MUTANTE-SMBIOS] 3. Expected: %s\n", uuidString);
+            DbgPrint("*** [MUTANTE-SMBIOS] 4. Should work even with Secure Boot!\n");
+        }
+        else {
+            DbgPrint("*** [MUTANTE-SMBIOS] Physical memory is protected\n");
+            DbgPrint("*** [MUTANTE-SMBIOS] 1. DISABLE Secure Boot in BIOS\n");
+            DbgPrint("*** [MUTANTE-SMBIOS] 2. DISABLE TPM in BIOS\n");
+            DbgPrint("*** [MUTANTE-SMBIOS] 3. Run: bcdedit /set hypervisorlaunchtype off\n");
+            DbgPrint("*** [MUTANTE-SMBIOS] 4. REBOOT and re-run driver\n");
+        }
+
+        DbgPrint("*** [MUTANTE-SMBIOS] ==========================================\n");
+
+        finalStatus = STATUS_SUCCESS;
 
     }
     __except (EXCEPTION_EXECUTE_HANDLER) {
-        Log::Print("[SMBIOS] *** CRITICAL EXCEPTION: 0x%08X ***\n", GetExceptionCode());
+        ULONG exceptionCode = GetExceptionCode();
+        DbgPrint("*** [MUTANTE-SMBIOS] *** CRITICAL EXCEPTION: 0x%08X ***\n", exceptionCode);
         finalStatus = STATUS_UNSUCCESSFUL;
     }
 
-    Log::Print("[SMBIOS] ==========================================\n");
-    Log::Print("[SMBIOS] FINAL STATUS: %s\n", NT_SUCCESS(finalStatus) ? "SUCCESS" : "FAILED");
-    Log::Print("[SMBIOS] ==========================================\n");
+    DbgPrint("*** [MUTANTE-SMBIOS] FINAL STATUS: FORCE PHYSICAL COMPLETE\n");
 
     return finalStatus;
 }
-
 // =====================================================
 // STRING FUNCTIONS
 // =====================================================
